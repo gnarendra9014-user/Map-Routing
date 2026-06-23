@@ -1,0 +1,11 @@
+{
+  "name": "map-routing",
+  "version": "1.0.0",
+  "description": "High-performance map routing engine using OpenStreetMap data",
+  "dependencies": [
+    "libosmium",
+    "protozero",
+    "zlib",
+    "bzip2"
+  ]
+}

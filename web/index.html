@@ -1,0 +1,659 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Map Router - Professional Navigation Engine</title>
+    <meta name="description" content="High-performance interactive map routing visualizer featuring Dijkstra, A*, Bidirectional A*, and Contraction Hierarchies with real-time search space diagnostics.">
+
+    <!-- MapLibre GL CSS -->
+    <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4.3.0/dist/maplibre-gl.css" />
+
+    <!-- Google Fonts: Outfit for display/headings, Inter for UI, JetBrains Mono for Console -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&family=Outfit:wght@500;600;700;800&display=swap" rel="stylesheet">
+
+    <link rel="stylesheet" href="style.css">
+</head>
+<body class="dark-theme">
+
+    <div id="app" v-cloak>
+        <!-- Header / Navbar -->
+        <header id="app-header">
+            <div class="header-left">
+                <button id="sidebar-toggle" class="btn-icon-nav" aria-label="Toggle Sidebar" @click="sidebarCollapsed = !sidebarCollapsed">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="3" y1="12" x2="21" y2="12"></line><line x1="3" y1="6" x2="21" y2="6"></line><line x1="3" y1="18" x2="21" y2="18"></line></svg>
+                </button>
+                <div class="logo">
+                    <svg width="24" height="24" viewBox="0 0 28 28" fill="none">
+                        <circle cx="14" cy="14" r="12" stroke="url(#grad1)" stroke-width="2.5"/>
+                        <circle cx="8" cy="10" r="2.5" fill="#38bdf8"/>
+                        <circle cx="20" cy="18" r="2.5" fill="#f472b6"/>
+                        <line x1="10" y1="11" x2="18" y2="17" stroke="url(#grad2)" stroke-width="1.5" stroke-dasharray="3 2"/>
+                        <defs>
+                            <linearGradient id="grad1" x1="0" y1="0" x2="28" y2="28">
+                                <stop stop-color="#38bdf8"/><stop offset="1" stop-color="#c084fc"/>
+                            </linearGradient>
+                            <linearGradient id="grad2" x1="8" y1="10" x2="20" y2="18">
+                                <stop stop-color="#38bdf8"/><stop offset="1" stop-color="#f472b6"/>
+                            </linearGradient>
+                        </defs>
+                    </svg>
+                    <h1>Map Router</h1>
+                </div>
+                <span class="badge" :class="{ connected: connected }">{{ connected ? 'Connected' : 'Connecting...' }}</span>
+            </div>
+            
+            <div class="header-right">
+                <div class="header-tour-selector">
+                    <label for="tour-select">Scenic Tour</label>
+                    <select id="tour-select" v-model="selectedTour" @change="loadScenicTour">
+                        <option value="" disabled selected>Select preset...</option>
+                        <option value="gp-circuit">Monaco Grand Prix Circuit</option>
+                        <option value="palace-casino">Palace to Monte Carlo Casino</option>
+                        <option value="harbor-beach">Port Hercule to Larvotto Beach</option>
+                        <option value="garden-beach">Exotic Garden to Larvotto Beach</option>
+                    </select>
+                </div>
+                
+                <div class="graph-stats" id="graph-stats">
+                    <span v-if="stats.nodes">Nodes: <span class="stat-value">{{ stats.nodes.toLocaleString() }}</span></span>
+                    <span v-if="stats.edges">Edges: <span class="stat-value">{{ stats.edges.toLocaleString() }}</span></span>
+                </div>
+                
+                <button id="theme-toggle" class="btn-theme-toggle" aria-label="Toggle Theme" @click="toggleTheme">
+                    <svg v-if="activeTheme === 'dark'" class="sun-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="5"></circle><line x1="12" y1="1" x2="12" y2="3"></line><line x1="12" y1="21" x2="12" y2="23"></line><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line><line x1="1" y1="12" x2="3" y2="12"></line><line x1="21" y1="12" x2="23" y2="12"></line><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line></svg>
+                    <svg v-else class="moon-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path></svg>
+                </button>
+            </div>
+        </header>
+
+        <!-- Main Container -->
+        <div id="app-container">
+            
+            <!-- Sidebar -->
+            <aside id="sidebar" class="floating-sidebar" :class="[
+                { collapsed: sidebarCollapsed },
+                'sheet-' + mobileSheetState
+            ]">
+                <!-- Mobile bottom sheet drag handle -->
+                <div class="mobile-drag-handle" @touchstart="handleTouchStart" @mousedown="handleMouseDown">
+                    <div class="drag-bar"></div>
+                </div>
+                
+                <!-- Panel 1: Route Setup -->
+                <div class="card card-routing">
+                    <div class="profile-tabs">
+                        <button class="profile-tab" :class="{ active: selectedProfile === 'car' }" @click="setProfile('car')">
+                            <span class="profile-icon">🚗</span> Driving
+                        </button>
+                        <button class="profile-tab" :class="{ active: selectedProfile === 'walking' }" @click="setProfile('walking')">
+                            <span class="profile-icon">🚶</span> Walking
+                        </button>
+                    </div>
+
+                    <div class="search-inputs-container">
+                        <!-- Start Point Search -->
+                        <div class="search-box">
+                            <div class="search-indicator marker-a">A</div>
+                            <div class="search-input-wrapper" role="combobox" aria-haspopup="listbox" :aria-expanded="start.suggestions.length > 0">
+                                <input type="text" 
+                                       v-model="start.address" 
+                                       class="search-field" 
+                                       placeholder="Search starting point..." 
+                                       autocomplete="off"
+                                       @focus="activeClickMode = 'start'"
+                                       @input="onSearchInput('start')"
+                                       @keydown.down.prevent="navigateSuggestions('start', 1)"
+                                       @keydown.up.prevent="navigateSuggestions('start', -1)"
+                                       @keydown.enter.prevent="selectHighlightedSuggestion('start')"
+                                       @keydown.escape="closeSuggestions('start')"
+                                       aria-autocomplete="list">
+                                <button v-show="start.address.length > 0" class="btn-clear-input" style="display: block;" aria-label="Clear start point" @click="clearPoint('start')">×</button>
+                                <div v-show="start.suggestions.length > 0" class="suggestions-dropdown" style="display: block;" role="listbox">
+                                    <div v-for="(item, idx) in start.suggestions" 
+                                         :key="idx" 
+                                         class="suggestion-item" 
+                                         :class="{ active: idx === start.focusedIndex }"
+                                         role="option"
+                                         :aria-selected="idx === start.focusedIndex"
+                                         @click="selectSuggestion('start', item)">
+                                        <span class="suggestion-icon">{{ item.icon || '📍' }}</span>
+                                        <span class="suggestion-text">{{ item.name }}</span>
+                                        <span class="suggestion-meta">{{ item.source }}</span>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Waypoints Container -->
+                        <div id="waypoints-list">
+                            <div v-for="(wp, index) in stops" :key="wp.id" class="search-box waypoint-box">
+                                <div class="search-indicator marker-waypoint">{{ index + 1 }}</div>
+                                <div class="search-input-wrapper" role="combobox" aria-haspopup="listbox" :aria-expanded="wp.suggestions.length > 0">
+                                    <input type="text" 
+                                           v-model="wp.address" 
+                                           class="search-field" 
+                                           placeholder="Search waypoint..." 
+                                           autocomplete="off"
+                                           @focus="activeClickMode = wp.id"
+                                           @input="onSearchInput(wp)"
+                                           @keydown.down.prevent="navigateSuggestions(wp, 1)"
+                                           @keydown.up.prevent="navigateSuggestions(wp, -1)"
+                                           @keydown.enter.prevent="selectHighlightedSuggestion(wp)"
+                                           @keydown.escape="closeSuggestions(wp)"
+                                           aria-autocomplete="list">
+                                    <button v-show="wp.address.length > 0" class="btn-clear-input" style="display: block;" aria-label="Clear waypoint" @click="clearPoint(wp)">×</button>
+                                    <div v-show="wp.suggestions.length > 0" class="suggestions-dropdown" style="display: block;" role="listbox">
+                                        <div v-for="(item, idx) in wp.suggestions" 
+                                             :key="idx" 
+                                             class="suggestion-item" 
+                                             :class="{ active: idx === wp.focusedIndex }"
+                                             role="option"
+                                             :aria-selected="idx === wp.focusedIndex"
+                                             @click="selectSuggestion(wp, item)">
+                                            <span class="suggestion-icon">{{ item.icon || '📍' }}</span>
+                                            <span class="suggestion-text">{{ item.name }}</span>
+                                            <span class="suggestion-meta">{{ item.source }}</span>
+                                        </div>
+                                    </div>
+                                </div>
+                                <button class="btn-remove-waypoint" title="Remove waypoint" @click="removeStopField(wp.id)">×</button>
+                            </div>
+                        </div>
+
+                        <!-- Destination Point Search -->
+                        <div class="search-box">
+                            <div class="search-indicator marker-b">B</div>
+                            <div class="search-input-wrapper" role="combobox" aria-haspopup="listbox" :aria-expanded="end.suggestions.length > 0">
+                                <input type="text" 
+                                       v-model="end.address" 
+                                       class="search-field" 
+                                       placeholder="Search destination..." 
+                                       autocomplete="off"
+                                       @focus="activeClickMode = 'end'"
+                                       @input="onSearchInput('end')"
+                                       @keydown.down.prevent="navigateSuggestions('end', 1)"
+                                       @keydown.up.prevent="navigateSuggestions('end', -1)"
+                                       @keydown.enter.prevent="selectHighlightedSuggestion('end')"
+                                       @keydown.escape="closeSuggestions('end')"
+                                       aria-autocomplete="list">
+                                <button v-show="end.address.length > 0" class="btn-clear-input" style="display: block;" aria-label="Clear destination" @click="clearPoint('end')">×</button>
+                                <div v-show="end.suggestions.length > 0" class="suggestions-dropdown" style="display: block;" role="listbox">
+                                    <div v-for="(item, idx) in end.suggestions" 
+                                         :key="idx" 
+                                         class="suggestion-item" 
+                                         :class="{ active: idx === end.focusedIndex }"
+                                         role="option"
+                                         :aria-selected="idx === end.focusedIndex"
+                                         @click="selectSuggestion('end', item)">
+                                        <span class="suggestion-icon">{{ item.icon || '📍' }}</span>
+                                        <span class="suggestion-text">{{ item.name }}</span>
+                                        <span class="suggestion-meta">{{ item.source }}</span>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Route Profile Options -->
+                    <div class="routing-profiles-row">
+                        <span class="routing-profiles-title">Route Profile</span>
+                        <div class="profile-btn-group">
+                            <button class="profile-select-btn" :class="{ active: selectedRoutingProfile === 'fastest' }" @click="setRoutingProfile('fastest')" title="Fastest Route (standard edge weights)">
+                                <span class="profile-select-icon">⚡</span> Fastest
+                            </button>
+                            <button class="profile-select-btn" :class="{ active: selectedRoutingProfile === 'scenic' }" @click="setRoutingProfile('scenic')" title="Scenic Route (prefers coastal roads)">
+                                <span class="profile-select-icon">🌊</span> Scenic
+                            </button>
+                            <button class="profile-select-btn" :class="{ active: selectedRoutingProfile === 'green' }" @click="setRoutingProfile('green')" title="Green Route (prefers parks, avoids tunnels)">
+                                <span class="profile-select-icon">🌳</span> Green
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Add Waypoint & Swap Buttons -->
+                    <div class="search-actions">
+                        <button class="btn-text-action" @click="addStopField">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+                            Add Stop
+                        </button>
+                        <button class="btn-text-action" :disabled="stops.length === 0" @click="optimizeWaypointsOrder" title="Optimize stops sequence (TSP)">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"></polyline><polyline points="1 20 1 14 7 14"></polyline><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path></svg>
+                            Optimize
+                        </button>
+                        <button class="btn-text-action" @click="reverseRoute" title="Reverse Route">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="17 1 21 5 17 9"></polyline><path d="M3 11V9a4 4 0 0 1 4-4h14"></path><polyline points="7 23 3 19 7 15"></polyline><path d="M21 13v2a4 4 0 0 1-4 4H3"></path></svg>
+                            Reverse
+                        </button>
+                    </div>
+
+                    <!-- Action Button Row -->
+                    <div class="action-buttons-row">
+                        <button class="btn btn-secondary" @click="clearAll">
+                            Clear
+                        </button>
+                        <button class="btn btn-primary" :disabled="!isRouteReady" @click="fetchRoute(selectedAlgo)">
+                            Get Route
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Panel 2: Route Performance Results (Turn-by-turn & Diagnostics) -->
+                <div class="card card-results" v-show="routeData" style="display: block;">
+                    <div class="results-header">
+                        <div class="route-summary">
+                            <div class="summary-metric">
+                                <span class="metric-value">{{ formattedDuration }}</span>
+                                <span class="metric-label">Duration</span>
+                            </div>
+                            <div class="summary-divider"></div>
+                            <div class="summary-metric">
+                                <span class="metric-value">{{ formattedDistance }}</span>
+                                <span class="metric-label">Distance</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Export & Actions -->
+                    <div class="route-export-actions">
+                        <button class="btn btn-export" @click="exportToGeoJSON">
+                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+                            GeoJSON
+                        </button>
+                        <button class="btn btn-export" @click="exportToGPX">
+                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+                            GPX
+                        </button>
+                        <button class="btn btn-export" title="Copy shareable link" @click="copyShareLink">
+                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="18" cy="5" r="3"></circle><circle cx="6" cy="12" r="3"></circle><circle cx="18" cy="19" r="3"></circle><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"></line><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"></line></svg>
+                            Share
+                        </button>
+                        <button class="btn btn-export" title="Start cinematic flythrough tour" @click="startCinematicTour">
+                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
+                            3D Tour
+                        </button>
+                    </div>
+
+                    <!-- Tab system inside results -->
+                    <div class="results-tabs">
+                        <button class="results-tab-btn" :class="{ active: activeResultsTab === 'directions' }" @click="activeResultsTab = 'directions'">Directions</button>
+                        <button class="results-tab-btn" :class="{ active: activeResultsTab === 'diagnostics' }" @click="activeResultsTab = 'diagnostics'">Diagnostics</button>
+                        <button class="results-tab-btn" :class="{ active: activeResultsTab === 'elevation' }" @click="activeResultsTab = 'elevation'">Elevation</button>
+                    </div>
+
+                    <!-- Content 1: Directions List -->
+                    <div class="results-tab-content" v-show="activeResultsTab === 'directions'">
+                        <div class="directions-list" id="directions-list-container">
+                            <div v-for="(step, idx) in directions" 
+                                 :key="idx" 
+                                 class="direction-step-item"
+                                 @click="panToCoordinate(step.coord)">
+                                <div class="step-icon-wrapper">{{ step.icon }}</div>
+                                <div class="step-details">
+                                    <span class="step-instruction">{{ step.instruction }}</span>
+                                    <span class="step-meta">In {{ formatDistance(step.distance) }}</span>
+                                </div>
+                            </div>
+                            <div v-if="directions.length === 0" class="text-muted">Instructions unavailable.</div>
+                        </div>
+                    </div>
+
+                    <!-- Content 2: Algorithm Comparison & Diagnostics -->
+                    <div class="results-tab-content" v-show="activeResultsTab === 'diagnostics'">
+                        <div class="diagnostics-summary">
+                            <div class="diag-row">
+                                <span class="diag-label">Query Time:</span>
+                                <span class="diag-value highlight">{{ routeData ? routeData.query_ms.toFixed(2) + ' ms' : '-' }}</span>
+                            </div>
+                            <div class="diag-row">
+                                <span class="diag-label">Nodes Visited:</span>
+                                <span class="diag-value">{{ routeData ? routeData.visited.length.toLocaleString() : '-' }}</span>
+                            </div>
+                        </div>
+
+                        <div class="algo-comparison" v-show="showBenchmarkSection" style="display: block;">
+                            <h3>Speed Comparison</h3>
+                            <div class="comparison-bars">
+                                <template v-for="algo in comparisonOrder" :key="algo">
+                                    <div v-if="comparisonResults[algo]" class="comparison-bar-item">
+                                        <span class="bar-label">{{ algoNames[algo] }}</span>
+                                        <div class="bar-track">
+                                            <div class="bar-fill" 
+                                                 :class="[algo]" 
+                                                 :style="{ width: getComparisonBarWidth(algo) }">
+                                                {{ comparisonResults[algo].query_ms.toFixed(3) }} ms
+                                            </div>
+                                        </div>
+                                    </div>
+                                </template>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Content 3: Elevation Profile -->
+                    <div class="results-tab-content" v-show="activeResultsTab === 'elevation'">
+                        <div class="elevation-profile-container" id="elevation-profile">
+                            <!-- Rendered reactively via SVG -->
+                            <svg v-if="elevationData.polyline" viewBox="0 0 360 120" preserveAspectRatio="none">
+                                <defs>
+                                    <linearGradient id="elevGradient" x1="0" y1="0" x2="0" y2="1">
+                                        <stop offset="0%" stop-color="#38bdf8" stop-opacity="0.8"/>
+                                        <stop offset="100%" stop-color="#38bdf8" stop-opacity="0.0"/>
+                                    </linearGradient>
+                                </defs>
+                                <line x1="0" y1="60" x2="360" y2="60" class="elevation-grid-line" stroke-dasharray="2,2"/>
+                                <polygon :points="elevationData.area" class="elevation-area"/>
+                                <polyline :points="elevationData.polyline" class="elevation-line"/>
+                                <text x="5" y="15" class="elevation-label">{{ Math.round(elevationData.maxElev) }}m</text>
+                                <text x="5" y="115" class="elevation-label">0m</text>
+                            </svg>
+                            <div v-else class="elevation-placeholder text-muted" style="font-size:11px; padding:8px;">Calculate a route to see the elevation profile.</div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Panel 3: Routing Engine Config (Algorithm Selection) -->
+                <div class="card card-config">
+                    <div class="card-header">
+                        <h2>Routing Engine</h2>
+                    </div>
+                    <div class="algo-selection">
+                        <div class="algo-grid algo-grid-6">
+                            <button v-for="algo in algos" 
+                                    :key="algo" 
+                                    class="algo-btn" 
+                                    :class="{ active: selectedAlgo === algo }"
+                                    @click="setAlgo(algo)">
+                                <span class="algo-name">{{ algoNames[algo] }}</span>
+                            </button>
+                        </div>
+                    </div>
+                    
+                    <button class="btn btn-secondary btn-full" :disabled="!isRouteReady" @click="compareAll">
+                        Benchmark All Algorithms
+                    </button>
+                </div>
+
+                <!-- Panel 4: Map Overlays & Custom Conditions -->
+                <div class="card card-overlays">
+                    <div class="card-header">
+                        <h2>Map Overlays & Conditions</h2>
+                    </div>
+                    <div class="overlay-toggles">
+                        <button class="overlay-toggle-btn" :class="{ active: isochroneActive }" @click="toggleIsochrone">
+                            <span class="overlay-icon">🔵</span>
+                            <span class="overlay-label">Isochrone</span>
+                            <span class="overlay-status">{{ isochroneActive ? 'ON' : 'OFF' }}</span>
+                        </button>
+                        <button class="overlay-toggle-btn" :class="{ active: heatmapActive }" @click="toggleHeatmap">
+                            <span class="overlay-icon">🌐</span>
+                            <span class="overlay-label">Road Network</span>
+                            <span class="overlay-status">{{ heatmapActive ? 'ON' : 'OFF' }}</span>
+                        </button>
+                        <button class="overlay-toggle-btn" :class="{ active: trafficActive }" @click="toggleTraffic">
+                            <span class="overlay-icon">🚦</span>
+                            <span class="overlay-label">Live Traffic</span>
+                            <span class="overlay-status">{{ trafficActive ? 'ON' : 'OFF' }}</span>
+                        </button>
+                        <button class="overlay-toggle-btn" :class="{ active: avoidanceActive }" @click="toggleAvoidanceMode">
+                            <span class="overlay-icon">🚧</span>
+                            <span class="overlay-label">Draw Obstacle</span>
+                            <span class="overlay-status">{{ avoidanceActive ? 'ON' : 'OFF' }}</span>
+                        </button>
+                    </div>
+
+                    <!-- Traffic Time Simulator -->
+                    <div class="traffic-slider-container" v-show="trafficActive" style="display: block; margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border-color);">
+                        <div class="traffic-time-label-row">
+                            <span class="traffic-slider-title">Simulate Time</span>
+                            <span class="traffic-time-value">{{ formattedTrafficTime }}</span>
+                        </div>
+                        <input type="range" v-model.number="trafficTime" min="0" max="1439" class="premium-slider" style="width:100%; margin-top:6px;" @input="onTrafficSliderInput" @change="onTrafficSliderChange">
+                    </div>
+
+                    <!-- Avoidance Actions -->
+                    <div class="avoidance-actions-container" v-show="avoidanceCircles.length > 0" style="display: block; margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border-color);">
+                        <button class="btn btn-secondary btn-full btn-sm" @click="clearAllAvoidance">
+                            Clear All Obstacles ({{ avoidanceCircles.length }})
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Panel 5: Route History -->
+                <div class="card card-history">
+                    <div class="card-header">
+                        <h2>Route History</h2>
+                    </div>
+                    <div class="history-list">
+                        <div v-for="item in history" 
+                             :key="item.id" 
+                             class="history-item"
+                             @click="loadHistoryItem(item)">
+                            <div class="history-icon">🕒</div>
+                            <div class="history-details">
+                                <span class="history-label">{{ item.srcName }} → {{ item.dstName }}</span>
+                                <span class="history-meta">{{ item.distance_km }} km • {{ item.duration }}</span>
+                            </div>
+                            <button class="history-remove" title="Remove" @click.stop="removeHistoryItem(item.id)">×</button>
+                        </div>
+                        <div v-if="history.length === 0" class="text-muted" style="font-size:11px; padding:4px;">No routes saved yet.</div>
+                    </div>
+                </div>
+
+                <!-- Panel 6: Developer Mode / Live Exploration Visualizer -->
+                <div class="card card-dev-mode">
+                    <button class="dev-mode-header-toggle" :class="{ active: devPanelOpen }" @click="devPanelOpen = !devPanelOpen">
+                        <span>🛠️ Developer & Exploration Tools</span>
+                        <span class="chevron-icon">{{ devPanelOpen ? '▲' : '▼' }}</span>
+                    </button>
+                    <div class="dev-panel-content" v-show="devPanelOpen" style="display: block;">
+                        <div class="visualizer-controls-row">
+                            <div class="playback-buttons">
+                                <button class="btn btn-secondary btn-icon" :disabled="playbackState === 'stopped' && !routeData" title="Play / Pause" @click="togglePlayPause">
+                                    <span>{{ playbackState === 'playing' ? '⏸' : '▶' }}</span>
+                                </button>
+                                <button class="btn btn-secondary btn-icon" :disabled="playbackState === 'stopped'" title="Reset" @click="stopExploration">
+                                    <span>⏹</span>
+                                </button>
+                            </div>
+                            <div class="speed-control">
+                                <label for="anim-speed">Speed</label>
+                                <input type="range" id="anim-speed" v-model.number="animSpeed" min="1" max="100">
+                            </div>
+                        </div>
+
+                        <!-- Scrolling Live Console -->
+                        <div class="console-wrapper">
+                            <div class="console-header">
+                                <span class="console-dot-indicator" :class="{ running: playbackState === 'playing' }"></span>
+                                <span class="console-title">Engine Logs</span>
+                            </div>
+                            <div class="console-body" id="console-logs">
+                                <div v-for="(log, idx) in logs" :key="idx" class="console-line" :class="[log.type]">
+                                    > {{ log.text }}
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+            </aside>
+
+            <!-- Map Container -->
+            <div id="map-container">
+                <div id="map"></div>
+
+                <!-- Floating map style controller -->
+                <div id="map-style-control" class="floating-control">
+                    <button class="style-btn" :class="{ active: activeMapStyle === 'dark' }" @click="switchMapStyle('dark')">Dark</button>
+                    <button class="style-btn" :class="{ active: activeMapStyle === 'light' }" @click="switchMapStyle('light')">Light</button>
+                    <button class="style-btn" :class="{ active: activeMapStyle === 'streets' }" @click="switchMapStyle('streets')">Streets</button>
+                </div>
+
+                <!-- Floating Toggle Sidebar Button (Only visible when sidebar is collapsed) -->
+                <button id="sidebar-open-btn" class="floating-sidebar-btn" aria-label="Open Sidebar" v-show="sidebarCollapsed" style="display: flex;" @click="sidebarCollapsed = false">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="3" y1="12" x2="21" y2="12"></line><line x1="3" y1="6" x2="21" y2="6"></line><line x1="3" y1="18" x2="21" y2="18"></line></svg>
+                </button>
+
+                <!-- Loading overlay -->
+                <div id="loading-overlay" v-show="loading">
+                    <div class="loader">
+                        <div class="loader-ring"></div>
+                        <span>Querying C++ Routing Engine...</span>
+                    </div>
+                </div>
+
+                <!-- Cinematic Tour Playback HUD -->
+                <div id="tour-hud" class="tour-playback-hud" v-show="tourActive" style="display: block;">
+                    <div class="tour-hud-content">
+                        <div class="tour-hud-header">
+                            <div class="tour-hud-header-left">
+                                <span class="tour-hud-icon">✈️</span>
+                                <span class="tour-hud-title">Cinematic 3D Tour</span>
+                            </div>
+                            <button class="tour-hud-close" title="Exit Tour" @click="stopTour">×</button>
+                        </div>
+                        <div class="tour-hud-body">
+                            <div class="tour-hud-direction" v-if="tourInstruction">
+                                <span class="tour-direction-icon">{{ tourInstructionIcon }}</span>
+                                <span class="tour-direction-text">{{ tourInstruction }}</span>
+                            </div>
+                            <div class="tour-hud-info">
+                                <span class="tour-hud-street">{{ tourStreet }}</span>
+                                <span class="tour-hud-speed">{{ tourSpeedKmH }} km/h</span>
+                            </div>
+                            <div class="tour-hud-progress-wrapper">
+                                <div class="tour-hud-progress-bar" :style="{ width: tourProgressPct + '%' }"></div>
+                            </div>
+                            <div class="tour-hud-controls">
+                                <button class="btn-tour-play" title="Play / Pause" @click="toggleTourPlayPause">
+                                    {{ tourPlaying ? '⏸' : '▶' }}
+                                </button>
+                                <button class="btn-tour-stop" title="Stop" @click="stopTour">⏹</button>
+                                <div class="tour-hud-speed-selector">
+                                    <label for="tour-speed-select">Speed</label>
+                                    <select id="tour-speed-select" v-model.number="tourSpeedMultiplier">
+                                        <option :value="1">1x</option>
+                                        <option :value="2">2x</option>
+                                        <option :value="5">5x</option>
+                                        <option :value="10">10x</option>
+                                    </select>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Benchmark Dashboard Modal Overlay -->
+        <div id="benchmark-dashboard" class="dashboard-overlay" v-show="dashboardOpen" style="display: flex;" @click.self="closeDashboard">
+            <div class="dashboard-modal">
+                <div class="dashboard-header">
+                    <div class="dashboard-title">
+                        <span class="dashboard-icon">🏆</span>
+                        <h2>Algorithm Performance Dashboard</h2>
+                    </div>
+                    <button class="dashboard-close-btn" aria-label="Close Dashboard" @click="closeDashboard">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+                    </button>
+                </div>
+
+                <div class="dashboard-body">
+                    <!-- Algorithm Summary Cards -->
+                    <div class="dashboard-cards dashboard-cards-6">
+                        <template v-for="algo in algos" :key="algo">
+                            <div v-if="comparisonResults[algo]" 
+                                 class="dashboard-card"
+                                 :class="['algo-' + algo, { winner: algo === dashboardStats.fastest }]">
+                                <div class="card-algo-name">{{ algoNames[algo] }}</div>
+                                <div class="card-metrics">
+                                    <div class="card-metric">
+                                        <span class="metric-label">Query Time</span>
+                                        <span class="metric-val time-val">{{ formatQueryTime(comparisonResults[algo].query_ms) }}</span>
+                                    </div>
+                                    <div class="card-metric">
+                                        <span class="metric-label">Nodes</span>
+                                        <span class="metric-val">{{ comparisonResults[algo].visited.length.toLocaleString() }}</span>
+                                    </div>
+                                    <div class="card-metric">
+                                        <span class="metric-label">Distance</span>
+                                        <span class="metric-val">{{ (comparisonResults[algo].distance_m / 1000).toFixed(2) }} km</span>
+                                    </div>
+                                    <div class="card-metric">
+                                        <span class="metric-label">Duration</span>
+                                        <span class="metric-val">{{ comparisonResults[algo].duration_min.toFixed(1) }} min</span>
+                                    </div>
+                                </div>
+                            </div>
+                        </template>
+                    </div>
+
+                    <!-- Charts Section -->
+                    <div class="dashboard-charts">
+                        <div class="dashboard-chart-section">
+                            <h3><span class="chart-icon">⏱️</span> Query Time</h3>
+                            <div class="dashboard-bars">
+                                <template v-for="algo in algos" :key="algo">
+                                    <div v-if="comparisonResults[algo]" class="dashboard-bar-row">
+                                        <span class="dashboard-bar-label">{{ algoNames[algo] }}</span>
+                                        <div class="dashboard-bar-track">
+                                            <div class="dashboard-bar-fill" 
+                                                 :class="[algo, { 'bar-winner': algo === dashboardStats.fastest }]" 
+                                                 :style="{ width: getDashboardTimeBarWidth(algo) }">
+                                                {{ formatQueryTime(comparisonResults[algo].query_ms) }}
+                                            </div>
+                                        </div>
+                                    </div>
+                                </template>
+                            </div>
+                        </div>
+                        
+                        <div class="dashboard-chart-section">
+                            <h3><span class="chart-icon">🔍</span> Nodes Explored</h3>
+                            <div class="dashboard-bars">
+                                <template v-for="algo in algos" :key="algo">
+                                    <div v-if="comparisonResults[algo]" class="dashboard-bar-row">
+                                        <span class="dashboard-bar-label">{{ algoNames[algo] }}</span>
+                                        <div class="dashboard-bar-track">
+                                            <div class="dashboard-bar-fill" 
+                                                 :class="[algo, { 'bar-winner': algo === dashboardStats.fewestNodes }]" 
+                                                 :style="{ width: getDashboardNodesBarWidth(algo) }">
+                                                {{ comparisonResults[algo].visited.length.toLocaleString() }}
+                                            </div>
+                                        </div>
+                                    </div>
+                                </template>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Verdict -->
+                    <div class="dashboard-verdict">
+                        <template v-if="dashboardStats.fastest && dashboardStats.slowest && dashboardStats.fastest !== dashboardStats.slowest">
+                            <div class="verdict-title">🏆 {{ algoNames[dashboardStats.fastest] }} Wins!</div>
+                            <span class="verdict-speedup">{{ (comparisonResults[dashboardStats.slowest].query_ms / comparisonResults[dashboardStats.fastest].query_ms).toFixed(0) }}x faster</span>
+                            <div class="verdict-detail">
+                                {{ algoNames[dashboardStats.fastest] }} completed in <strong>{{ formatQueryTime(comparisonResults[dashboardStats.fastest].query_ms) }}</strong>
+                                vs {{ algoNames[dashboardStats.slowest] }}'s <strong>{{ formatQueryTime(comparisonResults[dashboardStats.slowest].query_ms) }}</strong>,
+                                exploring <strong>{{ comparisonResults[dashboardStats.fastest].visited.length.toLocaleString() }}</strong> nodes compared to
+                                <strong>{{ comparisonResults[dashboardStats.slowest].visited.length.toLocaleString() }}</strong>.
+                            </div>
+                        </template>
+                        <template v-else>
+                            <div class="verdict-title">Benchmarking Complete</div>
+                        </template>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- MapLibre and Vue 3 Scripts -->
+    <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+    <script src="https://unpkg.com/maplibre-gl@4.3.0/dist/maplibre-gl.js"></script>
+    <script src="app.js"></script>
+</body>
+</html>

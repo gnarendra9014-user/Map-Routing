@@ -1,0 +1,19 @@
+# Build directories and IDE folders
+build/
+vcpkg_installed/
+.vscode/
+.vs/
+out/
+
+# Executables and object files
+*.exe
+*.obj
+*.pdb
+*.ilk
+*.lib
+*.dll
+
+# Graph data and caches
+data/
+*.graph
+*.ch
